@@ -1,0 +1,198 @@
+//USE THIS TO DETERMINE THE AMOUNT OF ISSUES YOU WANT THE REPEATING LIST TO CYCLE THROUGH. I HAVE IT CYCLE THROUGH 500 ISSUES AT A TIME
+const totalTickets = 30000;  
+const rangeStep = 500;  
+
+function generateTicketRanges(totalTickets, rangeStep) {
+    const ranges = [];
+    
+    for (let startRange = 0; startRange < totalTickets; startRange += rangeStep) {
+        const endRange = Math.min(startRange + rangeStep - 1, totalTickets - 1);
+        ranges.push({ 
+            "startRange":startRange, 
+            "endRange": endRange });
+    }
+
+    return ranges;
+}
+
+const ticketRanges = generateTicketRanges(totalTickets, rangeStep);
+
+console.log(ticketRanges);
+
+output.set('ranges',ticketRanges)
+
+!-------------------------------------------//EACH REPEATING BLOCK USES THIS, BUT I PASS A JQL TO PULL SPECIFIC TICKETS, IN THIS CASE THOUGH WITHOUT EPICS. BUT I CAN DO A REPEATING LIST OF EPIC IDS AND PASS THEM IN HERE TOO
+let table = base.getTable('Work/Tasks')
+let query = await table.selectRecordsAsync()
+
+let sprintsTable = base.getTable('Sprints')
+let sprintsQuery = await sprintsTable.selectRecordsAsync()
+
+let newRecordArray = []
+let updateRecArray = []
+
+let inputConfig = input.config();
+
+let startRange = inputConfig.startRange
+let endRange = inputConfig.endRange
+
+
+await getFieldNameFromId(table, "fldmyDHyRPtq3vQ9t")
+//console.log('test')
+await getIssues();
+
+async function getIssues() {
+    const username = 'EMAIL ON JIRA ACCOUNT';
+    const apiToken = 'TOKEN';
+    const base64Credentials = btoaCustom(`${username}:${apiToken}`);
+    const jqlQuery = `issuetype != "Epic" AND "Parent" IS EMPTY`; 
+
+    console.log(jqlQuery)
+
+    // Loop to handle pagination
+    const maxResults = 100; // The maximum results per request (Jira's limit is 100)
+    let startAt = startRange; // Starting point for pagination
+    const totalResults = endRange; // The number of issues to fetch (3000)
+
+    while (startAt < totalResults) {
+        const url = `https://air-org.atlassian.net/rest/api/3/search?jql=${encodeURIComponent(jqlQuery)}&startAt=${startAt}&maxResults=${maxResults}&expand=schema,names`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                "Authorization": `Basic ${base64Credentials}`,
+                "Accept": "application/json"
+            }
+        });
+
+        if (!response.ok) {
+            console.error("Failed to fetch issues:", response.statusText);
+            return;
+        }
+
+        const payloadData = await response.json();
+        //console.log(payloadData);
+        console.log(`Fetched ${payloadData.issues.length} issues starting at ${startAt}`);
+
+        for (let issueData of payloadData.issues) {
+            let foundCheck = false;
+            for (let rec of query.records) {
+                if (rec.getCellValueAsString('Key') == issueData.key) {
+                    foundCheck = true;
+                    let updateRec = {
+                        id: rec.id,
+                        fields: {
+                            "Ticket Title": issueData['fields']['summary'] || '',
+                            "Type": issueData['fields']['issuetype']?.['name'] || '',
+                            "Key": issueData['key'] || '',
+                            "Priority": issueData['fields']['priority']?.['name'] || '' ,
+                            "Labels": (issueData['fields']['labels'] && issueData['fields']['labels'].length > 0) ? issueData['fields']['labels'].join(',') : '',
+                            "Status": issueData['fields']['status']?.['name'] || '',
+                            "Due Date": issueData['fields']['duedate'] || '',
+                            "Reporter": issueData['fields']['reporter']?.['displayName'] || '',
+                            "Assignee Text": issueData['fields']['assignee']?.['displayName'] || '', // Handled with await findOrCreateTeamMember(assignee)
+                            "Sprint List": await getSprintRecordIDs(issueData['fields']['customfield_10020']), // Handled with await findSprintID(...)
+                            "SP": Number.isInteger(issueData['fields']['customfield_10026']) ? issueData['fields']['customfield_10026'] : null
+                        }
+                    };
+                    updateRecArray.push(updateRec);
+                    break;
+                }
+            }
+
+            if (!foundCheck) {
+                let newRecord = {
+                    fields: {
+                        "Ticket Title": issueData['fields']['summary'] || '',
+                        "Type": issueData['fields']['issuetype']?.['name'] || '',
+                        "Key": issueData['key'] || '',
+                        "Priority": issueData['fields']['priority']?.['name'] || '' ,
+                        "Labels": (issueData['fields']['labels'] && issueData['fields']['labels'].length > 0) ? issueData['fields']['labels'].join(',') : '',
+                        "Status": issueData['fields']['status']?.['name'] || '',
+                        "Due Date": issueData['fields']['duedate'] || '',
+                        "Reporter": issueData['fields']['reporter']?.['displayName'] || '',
+                        "Assignee Text": issueData['fields']['assignee']?.['displayName'] || '', // Handled with await findOrCreateTeamMember(assignee)
+                        "Sprint List": await getSprintRecordIDs(issueData['fields']['customfield_10020']), // Handled with await findSprintID(...)
+                        "SP": Number.isInteger(issueData['fields']['customfield_10026']) ? issueData['fields']['customfield_10026'] : null
+                    }
+                };
+                newRecordArray.push(newRecord);
+            }
+        }
+
+        // Check if we've reached the limit of 3000 issues
+        if (startAt + maxResults >= totalResults) {
+            break; // Stop fetching once we hit 3000 issues
+        }
+
+        // Otherwise, move to the next set of results (pagination)
+        startAt += maxResults;
+    }
+
+    //Create new records in batches
+    while (newRecordArray.length > 0) {
+        await table.createRecordsAsync(newRecordArray.slice(0, 50));
+        newRecordArray = newRecordArray.slice(50);
+    }
+
+    // Update existing records in batches
+    while (updateRecArray.length > 0) {
+        await table.updateRecordsAsync(updateRecArray.slice(0, 50));
+        updateRecArray = updateRecArray.slice(50);
+    }
+}
+
+
+function btoaCustom(input) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let str = '';
+    let i = 0;
+    
+    // Convert each chunk of 3 bytes into 4 Base64 characters
+    while (i < input.length) {
+        const byte1 = input.charCodeAt(i++);
+        const byte2 = input.charCodeAt(i++);
+        const byte3 = input.charCodeAt(i++);
+        
+        const enc1 = byte1 >> 2;
+        const enc2 = ((byte1 & 3) << 4) | (byte2 >> 4);
+        const enc3 = ((byte2 & 15) << 2) | (byte3 >> 6);
+        const enc4 = byte3 & 63;
+
+        str += chars.charAt(enc1) + chars.charAt(enc2) + (isNaN(byte2) ? '=' : chars.charAt(enc3)) + (isNaN(byte3) ? '=' : chars.charAt(enc4));
+    }
+
+    return str;
+}
+async function getFieldNameFromId(table, fieldId) {
+    const field = table.fields.find(f => f.id === fieldId);
+    if (field) {
+        console.log(field.name);
+    } else {
+        throw new Error("Field with this ID not found.");
+    }
+}
+async function getSprintRecordIDs(sprints) {
+    const sprintRecordIDs = [];
+
+    //console.log(sprints)
+
+    if(sprints == null){
+        return []
+    }
+
+    // Loop through each sprint object
+    for (let sprint of sprints) {
+        const sprintID = sprint.id;
+        
+        // Loop through the query records and match Sprint ID
+        for (let rec of sprintsQuery.records) {
+            if (rec.getCellValueAsString('Sprint ID') === sprintID.toString()) { // Assuming 'Sprint ID' is the field containing the sprint ID in Airtable
+                sprintRecordIDs.push({ id: rec.id });
+                //console.log('found')
+            }
+        }
+    }
+
+    return sprintRecordIDs;
+}
