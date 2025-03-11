@@ -1,0 +1,118 @@
+let table = base.getTable('Epics')
+let query = await table.selectRecordsAsync()
+
+let newRecordArray = []
+let updateRecArray = []
+
+let inputConfig = input.config();
+let projectKey = inputConfig.projectKey
+let projectRecordID = inputConfig.projectRecordID
+
+let startAt = 0;
+const maxResults = 100;
+
+
+await getEpics();
+
+async function getEpics() {
+    const username = 'EMAIL ON JIRA ACCOUNT';
+    const apiToken = 'TOKEN';
+    const base64Credentials = btoaCustom(`${username}:${apiToken}`);
+    const jqlQuery = `project="${projectKey}" AND issuetype="Epic"`; 
+
+    // Loop to handle pagination
+    while (true) {
+        const url = `https://air-org.atlassian.net/rest/api/3/search?jql=${encodeURIComponent(jqlQuery)}&startAt=${startAt}&maxResults=${maxResults}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                "Authorization": `Basic ${base64Credentials}`,
+                "Accept": "application/json"
+            }
+        });
+
+        if (!response.ok) {
+            console.error("Failed to fetch epics:", response.statusText);
+            return;
+        }
+
+        const payloadData = await response.json();
+        console.log(`Fetched ${payloadData.issues.length} epics starting at ${startAt}`);
+        
+        for (let epicData of payloadData.issues) {
+            let foundCheck = false;
+            for (let rec of query.records) {
+                if (rec.getCellValueAsString('Key') == epicData.key) {
+                    foundCheck = true;
+                    let updateRec = {
+                        id: rec.id,
+                        fields: {
+                            "Epic Name": epicData.fields.customfield_10011,
+                            "Summary": epicData.fields.customfield_10011,
+                            "Project": [{id: projectRecordID}],
+                            "Key": epicData.key
+                        }
+                    };
+                    updateRecArray.push(updateRec);
+                    break;
+                }
+            }
+
+            if (!foundCheck) {
+                let newRecord = {
+                    fields: {
+                        "Epic Name": epicData.fields.customfield_10011,
+                        "Summary": epicData.fields.customfield_10011,
+                        "Project": [{id: projectRecordID}],
+                        "Key": epicData.key
+                    }
+                };
+                newRecordArray.push(newRecord);
+            }
+        }
+
+        // Check if there are more issues to fetch
+        if (payloadData.issues.length < maxResults) {
+            break; // No more issues to fetch, exit the loop
+        }
+
+        // Otherwise, move to the next set of results (pagination)
+        startAt += maxResults;
+    }
+
+    // Create new records in batches
+    while (newRecordArray.length > 0) {
+        await table.createRecordsAsync(newRecordArray.slice(0, 50));
+        newRecordArray = newRecordArray.slice(50);
+    }
+
+    // Update existing records in batches
+    while (updateRecArray.length > 0) {
+        await table.updateRecordsAsync(updateRecArray.slice(0, 50));
+        updateRecArray = updateRecArray.slice(50);
+    }
+}
+
+
+function btoaCustom(input) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let str = '';
+    let i = 0;
+    
+    // Convert each chunk of 3 bytes into 4 Base64 characters
+    while (i < input.length) {
+        const byte1 = input.charCodeAt(i++);
+        const byte2 = input.charCodeAt(i++);
+        const byte3 = input.charCodeAt(i++);
+        
+        const enc1 = byte1 >> 2;
+        const enc2 = ((byte1 & 3) << 4) | (byte2 >> 4);
+        const enc3 = ((byte2 & 15) << 2) | (byte3 >> 6);
+        const enc4 = byte3 & 63;
+
+        str += chars.charAt(enc1) + chars.charAt(enc2) + (isNaN(byte2) ? '=' : chars.charAt(enc3)) + (isNaN(byte3) ? '=' : chars.charAt(enc4));
+    }
+
+    return str;
+}
