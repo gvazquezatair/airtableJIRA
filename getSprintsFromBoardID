@@ -1,0 +1,121 @@
+let inputConfig = input.config();
+let boardID = inputConfig.boardID;
+//let boardID = 266
+
+let table = base.getTable('Sprints')
+let query = await table.selectRecordsAsync()
+
+console.log(boardID)
+
+let updateRecArray = []
+let newRecordArray  = []
+
+await getFieldNameFromId(table, "fld2RPe2bnSnHXuUB")
+await getSprints(boardID)
+
+async function getSprints(boardId) {
+    const username = 'EMAIL ON JIRA ACCOUNT';
+    const apiToken = 'TOKEN';
+    const base64Credentials = btoaCustom(`${username}:${apiToken}`);
+
+    let startAt = 0;
+    const maxResults = 50;  // Number of results per page (adjustable)
+
+    while (true) {
+        const url = `https://air-org.atlassian.net/rest/agile/1.0/board/${boardId}/sprint?startAt=${startAt}&maxResults=${maxResults}`;
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                "Authorization": `Basic ${base64Credentials}`,
+                "Accept": "application/json"
+            }
+        });
+
+        if (!response.ok) {
+            console.error("Failed to fetch sprints:", response.statusText);
+            return;
+        }
+
+        const payloadData = await response.json();
+        console.log(`Fetched ${payloadData.values.length} sprints starting at ${startAt}`);
+        console.log(payloadData)
+        
+        for (let sprintData of payloadData.values) {
+            let foundCheck = false;
+            for (let rec of query.records) {
+                if (rec.getCellValueAsString('Sprint ID') == sprintData.id) {
+                    foundCheck = true;
+                    let updateRec = {
+                        id: rec.id,
+                        fields: {
+                            "Sprint Name": sprintData.name,
+                            "State": sprintData.state,
+                            "Start Date": sprintData.startDate,
+                            "End Date": sprintData.endDate,
+                            "Sprint ID": (sprintData.id).toString()
+                        }
+                    };
+                    updateRecArray.push(updateRec);
+                    break;
+                }
+            }
+
+            if (!foundCheck) {
+                let newRecord = {
+                    fields: {
+                        "Sprint Name": sprintData.name,
+                        "State": sprintData.state,
+                        "Start Date": sprintData.startDate,
+                        "End Date": sprintData.endDate,
+                        "Sprint ID": (sprintData.id).toString()
+                    }
+                };
+                newRecordArray.push(newRecord);
+            }
+        }
+
+        if (payloadData.values.length < maxResults) {
+            break; // No more sprints to fetch, exit the loop
+        }
+
+        startAt += maxResults;
+    }
+    while (newRecordArray.length > 0) {
+        await table.createRecordsAsync(newRecordArray.slice(0, 50));
+        newRecordArray = newRecordArray.slice(50);
+    }
+
+    while (updateRecArray.length > 0) {
+        await table.updateRecordsAsync(updateRecArray.slice(0, 50));
+        updateRecArray = updateRecArray.slice(50);
+    }
+}
+function btoaCustom(input) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let str = '';
+    let i = 0;
+    
+    while (i < input.length) {
+        const byte1 = input.charCodeAt(i++);
+        const byte2 = input.charCodeAt(i++);
+        const byte3 = input.charCodeAt(i++);
+        
+        const enc1 = byte1 >> 2;
+        const enc2 = ((byte1 & 3) << 4) | (byte2 >> 4);
+        const enc3 = ((byte2 & 15) << 2) | (byte3 >> 6);
+        const enc4 = byte3 & 63;
+
+        str += chars.charAt(enc1) + chars.charAt(enc2) + (isNaN(byte2) ? '=' : chars.charAt(enc3)) + (isNaN(byte3) ? '=' : chars.charAt(enc4));
+    }
+
+    return str;
+}
+async function getFieldNameFromId(table, fieldId) {
+    const field = table.fields.find(f => f.id === fieldId);
+    if (field) {
+        console.log(field.name);
+    } else {
+        throw new Error("Field with this ID not found.");
+    }
+}
