@@ -1673,3 +1673,119 @@ while (updateRecArray.length > 0) {
     await epictable.updateRecordsAsync(updateRecArray.slice(0, 50));
     updateRecArray = updateRecArray.slice(50);
 }
+//getallusers
+await fetchAllUsers()
+
+async function fetchAllUsers() {
+    const username = 'test@test.org';
+    const apiToken = 'test12354';
+ 
+    const base64Credentials = btoaCustom(`${username}:${apiToken}`);
+    
+    const url = 'https://air-org.atlassian.net/rest/api/3/users/search?startAt=0&maxResults=1000'; // You can adjust maxResults as needed
+
+    const usertable = base.getTable('Team Members');  // Replace with your Airtable table name where users are stored
+    const userquery = await usertable.selectRecordsAsync();
+
+    let newUserArray = [];
+    let updateUserArray = [];
+
+    let startAt = 0; // Pagination starting point
+    const urlWithPagination = url;
+
+    const response = await fetch(urlWithPagination, {
+        method: 'GET',
+        headers: {
+            "Authorization": `Basic ${base64Credentials}`,
+            "Accept": "application/json"
+        }
+    });
+
+    console.log(response)
+
+    if (!response.ok) {
+        console.error("Failed to fetch users:", response.statusText);
+        return;
+    }
+
+    const usersData = await response.json();
+    console.log(usersData)
+    console.log(`Fetched ${usersData.length} users starting at ${startAt}`);
+
+    // Process fetched users
+    for (let userData of usersData) {
+        let foundCheck = false;
+
+        // Loop through Airtable records to find matching users
+        for (let rec of userquery.records) {
+            if (rec.getCellValueAsString('Jira ID') == userData.accountId) { // Match on user email or any unique identifier
+                foundCheck = true;
+
+                // Prepare update record
+                let updateRec = {
+                    id: rec.id,
+                    fields: {
+                        "Name": userData.displayName || '',
+                        "Jira ID": userData.accountId || '',
+                        "Active": userData.active || false
+                    }
+                };
+                updateUserArray.push(updateRec);
+                break;
+            }
+        }
+
+        // If not found, create a new user record
+        if (!foundCheck) {
+            let newRecord = {
+                fields: {
+                    "Name": userData.displayName || '',
+                    "Jira ID": userData.accountId || '',
+                    "Active": userData.active || false
+                }
+            };
+            newUserArray.push(newRecord);
+        }
+    }
+    
+
+    // Create new user records in batches
+    while (newUserArray.length > 0) {
+        await usertable.createRecordsAsync(newUserArray.slice(0, 50));
+        newUserArray = newUserArray.slice(50);
+    }
+
+    // Update existing user records in batches
+    while (updateUserArray.length > 0) {
+        await usertable.updateRecordsAsync(updateUserArray.slice(0, 50));
+        updateUserArray = updateUserArray.slice(50);
+
+    }
+}
+
+
+// Base64 encoding function for authentication
+function btoaCustom(input) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let str = '';
+    let i = 0;
+
+    // Convert each chunk of 3 bytes into 4 Base64 characters
+    while (i < input.length) {
+        const byte1 = input.charCodeAt(i++);
+        const byte2 = input.charCodeAt(i++);
+        const byte3 = input.charCodeAt(i++);
+        
+        const enc1 = byte1 >> 2;
+        const enc2 = ((byte1 & 3) << 4) | (byte2 >> 4);
+        const enc3 = ((byte2 & 15) << 2) | (byte3 >> 6);
+        const enc4 = byte3 & 63;
+
+        str += chars.charAt(enc1) + chars.charAt(enc2) + (isNaN(byte2) ? '=' : chars.charAt(enc3)) + (isNaN(byte3) ? '=' : chars.charAt(enc4));
+    }
+
+    return str;
+}
+
+// Call the function
+fetchAllUsers();
